@@ -1,0 +1,31 @@
+#root {
+  width: 100%;
+  min-height: 100vh; /* Utilisez min-height pour éviter les débordements */
+  margin: 0;
+  padding: 0;
+}
+
+.app-container {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.main-content {
+  flex: 1;
+  padding: 0;
+  position: relative; /* Important pour les enfants en position absolue */
+}
+
+.map-container {
+  height: 100%; /* Prend toute la hauteur disponible */
+  width: 100%;
+}
+
+.leaflet-container {
+  height: 100%; /* Nécessaire pour Leaflet */
+  width: 100%;
+}
+html {
+  scroll-behavior: smooth;
+}

@@ -1,0 +1,57 @@
+{% extends "admin/base_site.html" %}
+{% load i18n admin_urls static %}
+
+{% block content %}
+<!-- DEBUT DU CONTENU CUSTOM INDEX.HTML -->
+{{ block.super }}
+<div class="app-index-section module">
+    <div class="section-head">
+        <h2>{% trans "Actions Globales" %}</h2>
+    </div>
+    <div class="module-body">
+        <div class="app-description">
+            <p>{% trans "Gérez l'importation et le téléchargement des données pour tous les modèles." %}</p>
+        </div>
+        <div class="app-models">
+            <div class="model-demographicdata">
+                <a href="{% url 'admin:import_all_data' %}" class="addlink">
+                    <span class="material-symbols-outlined">upload_file</span>
+                    {% trans "Importer toutes les données" %}
+                </a>
+            </div>
+            <div class="model-demographicdata">
+                <a href="{% url 'admin:download_all_template' %}" class="addlink">
+                    <span class="material-symbols-outlined">download</span>
+                    {% trans "Télécharger le fichier modèle" %}
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+<!-- FIN DU CONTENU CUSTOM INDEX.HTML -->
+{% endblock %}
+
+{% block extrastyle %}
+{{ block.super }}
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons|Material+Icons+Outlined|Material+Icons+Two+Tone|Material+Icons+Round|Material+Icons+Sharp" rel="stylesheet">
+<style>
+    .app-index-section .module-body .app-models div a {
+        display: flex;
+        align-items: center;
+        padding: 10px 15px;
+        margin-bottom: 5px;
+        background-color: #f0f0f0;
+        border-radius: 5px;
+        text-decoration: none;
+        color: #333;
+        font-weight: bold;
+    }
+    .app-index-section .module-body .app-models div a:hover {
+        background-color: #e0e0e0;
+    }
+    .app-index-section .module-body .app-models div a .material-symbols-outlined {
+        margin-right: 10px;
+        font-size: 20px; /* Adjust icon size as needed */
+    }
+</style>
+{% endblock %} 

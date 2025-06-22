@@ -1,0 +1,90 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block content %}
+<div class="module">
+    <h1>Importer des données de recensement</h1>
+    
+    {% if messages %}
+    <ul class="messagelist">
+        {% for message in messages %}
+        <li{% if message.tags %} class="{{ message.tags }}"{% endif %}>{{ message }}</li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+
+    <form method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+        <fieldset class="module aligned">
+            {% for field in form %}
+            <div class="form-row">
+                {{ field.errors }}
+                {{ field.label_tag }}
+                {{ field }}
+                {% if field.help_text %}
+                <div class="help">{{ field.help_text|safe }}</div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </fieldset>
+        
+        <div class="submit-row">
+            <input type="submit" class="default" value="Importer">
+        </div>
+    </form>
+    
+    <div class="module">
+        <h2>Instructions</h2>
+        <div class="description">
+            <p>Pour importer des données :</p>
+            <ol>
+                <li>Sélectionnez le recensement pour lequel vous souhaitez importer des données</li>
+                <li>Choisissez votre fichier de données (format CSV, Excel ou JSON)</li>
+                <li>Sélectionnez le format du fichier</li>
+                <li>Cliquez sur "Importer"</li>
+            </ol>
+            
+            <h3>Format attendu du fichier :</h3>
+            <p>Le fichier doit contenir les colonnes suivantes :</p>
+            <ul>
+                <li><strong>Codes d'identification :</strong>
+                    <ul>
+                        <li>Country Code</li>
+                        <li>Region Code</li>
+                        <li>Department Code (optionnel)</li>
+                        <li>Commune Code (optionnel)</li>
+                    </ul>
+                </li>
+                <li><strong>Données démographiques :</strong>
+                    <ul>
+                        <li>Total Population</li>
+                        <li>Male Population</li>
+                        <li>Female Population</li>
+                        <li>Urban Population</li>
+                        <li>Rural Population</li>
+                        <li>Population 10+</li>
+                        <li>Single Rate</li>
+                        <li>Married Rate</li>
+                        <li>Divorced Rate</li>
+                        <li>Widowed Rate</li>
+                        <li>School Enrollment Rate</li>
+                        <li>Illiteracy Rate 10+</li>
+                        <li>Population 15+</li>
+                        <li>Illiteracy Rate 15+</li>
+                    </ul>
+                </li>
+                <li><strong>Données d'éducation (optionnel) :</strong>
+                    <ul>
+                        <li>No Education</li>
+                        <li>Preschool</li>
+                        <li>Primary</li>
+                        <li>Middle School</li>
+                        <li>High School</li>
+                        <li>University</li>
+                    </ul>
+                </li>
+            </ul>
+        </div>
+    </div>
+</div>
+{% endblock %}

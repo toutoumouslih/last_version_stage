@@ -1,0 +1,48 @@
+.concepts-definitions-container {
+    font-family: 'Arial', sans-serif;
+    padding: 20px;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+  
+  .page-title {
+    text-align: center;
+    font-size: 2rem;
+    color: #2c3e50;
+    margin-bottom: 40px;
+    border-bottom: 2px solid #3498db;
+    padding-bottom: 10px;
+  }
+  
+  .concepts-list {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 30px;
+  }
+  
+  .concept-item {
+    background-color: #f9f9f9;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  }
+  
+  .concept-title {
+    font-size: 1.25rem;
+    color: #2980b9;
+    margin-bottom: 15px;
+  }
+  
+  .concept-description {
+    font-size: 1rem;
+    color: #7f8c8d;
+    line-height: 1.6;
+  }
+  
+  /* Mobile responsiveness */
+  @media (max-width: 768px) {
+    .concepts-list {
+      grid-template-columns: 1fr;
+    }
+  }
+  
