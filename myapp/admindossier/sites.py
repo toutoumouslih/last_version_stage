@@ -23,8 +23,8 @@ class CustomAdminSite(AdminSite):
         ]
         return custom_urls + urls
 
-    def get_app_list(self, request):
-        app_list = super().get_app_list(request)
+    def get_app_list(self, request, app_label=None):
+        app_list = super().get_app_list(request, app_label)
         return sorted(app_list, key=lambda x: x['name'])
 
 custom_admin_site = CustomAdminSite(name='custom_admin')

@@ -1,5 +1,7 @@
 from rest_framework import viewsets
 from rest_framework import generics
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
 import openpyxl
 from .models import Country, Region, Department, Commune, DemographicData,  EducationLevel, Census
 from .serializers import CountrySerializer, RegionSerializer, DepartmentSerializer, CommuneSerializer ,  DemographicDataSerializer
@@ -20,6 +22,9 @@ from django.urls import reverse_lazy
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.styles import Font, Alignment, PatternFill, Protection
 from openpyxl.utils import get_column_letter
+from rest_framework.views import APIView
+from rest_framework.permissions import AllowAny
+from datetime import datetime
 
 
 def normalize_header(header):
@@ -89,6 +94,12 @@ class CentralizedImportView(FormView):
             skipped_rows = 0
             
             for row_index, row_data in enumerate(data):
+                # Vérification du niveau_donnee
+                niveau_idx = get_header_index(data.headers, 'niveau_donnee')
+                niveau = row_data[niveau_idx].strip().lower() if niveau_idx != -1 and row_data[niveau_idx] else ''
+                if niveau not in ['region', 'departement', 'commune']:
+                    skipped_rows += 1
+                    continue
                 # Récupération des codes
                 country_code = row_data[get_header_index(data.headers, 'Country Code')] if get_header_index(data.headers, 'Country Code') != -1 else None
                 region_code = row_data[get_header_index(data.headers, 'Region Code')] if get_header_index(data.headers, 'Region Code') != -1 else None
@@ -236,8 +247,26 @@ class CommuneViewSet(viewsets.ModelViewSet):
     serializer_class = CommuneSerializer
 
 class DemographicDataListCreateView(generics.ListCreateAPIView):
-    queryset = DemographicData.objects.all()
     serializer_class = DemographicDataSerializer
+
+    def get_queryset(self):
+        queryset = DemographicData.objects.all()
+        year = self.request.query_params.get('year', None)
+        
+        if year is not None:
+            try:
+                year = int(year)
+                queryset = queryset.filter(census__year=year)
+            except ValueError:
+                # Si l'année n'est pas un nombre valide, retourner un queryset vide
+                return DemographicData.objects.none()
+        else:
+            # Par défaut, retourner les données du recensement le plus récent
+            latest_census = Census.objects.order_by('-year').first()
+            if latest_census:
+                queryset = queryset.filter(census=latest_census)
+        
+        return queryset
 
 class DemographicDataDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = DemographicData.objects.all()
@@ -245,14 +274,13 @@ class DemographicDataDetailView(generics.RetrieveUpdateDestroyAPIView):
 
 @staff_member_required
 def download_template(request):
-    """Télécharger le modèle Excel pour l'import des données"""
+    """Télécharger le modèle Excel pour l'import des données (avec niveau_donnee explicite)"""
     wb = Workbook()
     ws = wb.active
     ws.title = "Données à Remplir"
 
-    # En-têtes avec descriptions
+    # En-têtes avec descriptions (reprend le template d'origine)
     headers = [
-        # Codes d'identification (obligatoires)
         ('Country Code', 'Code du pays (obligatoire)'),
         ('Country Name', 'Nom du pays (obligatoire)'),
         ('Region Code', 'Code de la région (obligatoire)'),
@@ -261,7 +289,7 @@ def download_template(request):
         ('Department Name', 'Nom du département (optionnel)'),
         ('Commune Code', 'Code de la commune (optionnel)'),
         ('Commune Name', 'Nom de la commune (optionnel)'),
-        
+        ('niveau_donnee', "Niveau de la donnée (region/departement/commune) - obligatoire"),
         # Données démographiques
         ('Total Population', 'Population totale (nombre entier)'),
         ('Male Population', 'Pourcentage de population masculine (0-100)'),
@@ -277,7 +305,6 @@ def download_template(request):
         ('Illiteracy Rate 10+', 'Taux d\'analphabétisme 10+ (0-100)'),
         ('Population 15+', 'Population de 15 ans et plus (nombre entier)'),
         ('Illiteracy Rate 15+', 'Taux d\'analphabétisme 15+ (0-100)'),
-        
         # Données d'éducation (optionnelles)
         ('No Education', 'Pourcentage sans éducation (0-100)'),
         ('Preschool', 'Pourcentage préscolaire (0-100)'),
@@ -301,108 +328,86 @@ def download_template(request):
         cell.font = header_font
         cell.fill = header_fill
         cell.alignment = header_alignment
-        
         # Description
         desc_cell = ws.cell(row=2, column=col, value=description)
         desc_cell.font = description_font
         desc_cell.alignment = description_alignment
 
-    # Remplir les données administratives existantes
     row = 3
-    communes = Commune.objects.select_related('department__region__country').all()
-    for commune in communes:
-        # Données administratives (pré-remplies)
-        country_code = commune.department.region.country.code if commune.department.region.country else ''
-        country_name = commune.department.region.country.name if commune.department.region.country else ''
-
-        ws.cell(row=row, column=1, value=country_code)
-        ws.cell(row=row, column=2, value=country_name)
-        ws.cell(row=row, column=3, value=commune.department.region.adm1_pcode)
-        ws.cell(row=row, column=4, value=commune.department.region.adm1_en)
-        ws.cell(row=row, column=5, value=commune.department.adm2_pcode)
-        ws.cell(row=row, column=6, value=commune.department.adm2_en)
+    # 1. Régions
+    for region in Region.objects.select_related('country').all():
+        ws.cell(row=row, column=1, value=region.country.code if region.country else '')
+        ws.cell(row=row, column=2, value=region.country.name if region.country else '')
+        ws.cell(row=row, column=3, value=region.adm1_pcode)
+        ws.cell(row=row, column=4, value=region.adm1_en)
+        ws.cell(row=row, column=9, value='region')
+        # Le reste vide
+        for col in list(range(5, 9)) + list(range(10, 30)):
+            ws.cell(row=row, column=col, value='')
+        row += 1
+    # 2. Départements
+    for department in Department.objects.select_related('region__country').all():
+        ws.cell(row=row, column=1, value=department.region.country.code if department.region and department.region.country else '')
+        ws.cell(row=row, column=2, value=department.region.country.name if department.region and department.region.country else '')
+        ws.cell(row=row, column=3, value=department.region.adm1_pcode if department.region else '')
+        ws.cell(row=row, column=4, value=department.region.adm1_en if department.region else '')
+        ws.cell(row=row, column=5, value=department.adm2_pcode)
+        ws.cell(row=row, column=6, value=department.adm2_en)
+        ws.cell(row=row, column=9, value='departement')
+        # Le reste vide
+        for col in [7,8] + list(range(10, 30)):
+            ws.cell(row=row, column=col, value='')
+        row += 1
+    # 3. Communes
+    for commune in Commune.objects.select_related('department__region__country').all():
+        ws.cell(row=row, column=1, value=commune.department.region.country.code if commune.department and commune.department.region and commune.department.region.country else '')
+        ws.cell(row=row, column=2, value=commune.department.region.country.name if commune.department and commune.department.region and commune.department.region.country else '')
+        ws.cell(row=row, column=3, value=commune.department.region.adm1_pcode if commune.department and commune.department.region else '')
+        ws.cell(row=row, column=4, value=commune.department.region.adm1_en if commune.department and commune.department.region else '')
+        ws.cell(row=row, column=5, value=commune.department.adm2_pcode if commune.department else '')
+        ws.cell(row=row, column=6, value=commune.department.adm2_en if commune.department else '')
         ws.cell(row=row, column=7, value=commune.adm3_pcode)
         ws.cell(row=row, column=8, value=commune.adm3_en)
-        
-        # Données démographiques (vides)
-        for col in range(9, 23):
+        ws.cell(row=row, column=9, value='commune')
+        # Le reste vide
+        for col in range(10, 30):
             ws.cell(row=row, column=col, value='')
-        
-        # Données d'éducation (vides)
-        for col in range(23, 29):
-            ws.cell(row=row, column=col, value='')
-        
         row += 1
 
-    # Validation des données
-    # Pour les pourcentages (0-100)
-    percent_validation = DataValidation(
-        type="decimal",
-        operator="between",
-        formula1=0,
-        formula2=100
-    )
-    percent_columns = [10, 11, 12, 13, 16, 17, 18, 19, 20, 21, 23, 24, 25, 26, 27, 28, 29]
-    for col in percent_columns:
-        percent_validation.add(f"{get_column_letter(col)}3:{get_column_letter(col)}{row}")
-    
-    # Pour les populations (nombres entiers positifs)
-    population_validation = DataValidation(
-        type="whole",
-        operator="greaterThanOrEqual",
-        formula1=0
-    )
-    population_columns = [9, 14, 22]
-    for col in population_columns:
-        population_validation.add(f"{get_column_letter(col)}3:{get_column_letter(col)}{row}")
-    
-    ws.add_data_validation(percent_validation)
-    ws.add_data_validation(population_validation)
-
     # Ajuster la largeur des colonnes
-    column_widths = {
-        'A': 15, 'B': 20,  # Country
-        'C': 15, 'D': 25,  # Region
-        'E': 15, 'F': 25,  # Department
-        'G': 15, 'H': 25,  # Commune
-        'I': 20,  # Total Population
-        'J': 20, 'K': 20, 'L': 20, 'M': 20,  # Population percentages
-        'N': 20,  # Population 10+
-        'O': 15, 'P': 15, 'Q': 15, 'R': 15, 'S': 15,  # Rates
-        'T': 20, 'U': 20, 'V': 20, 'W': 20,  # Education rates
-        'X': 15, 'Y': 15, 'Z': 15, 'AA': 15, 'AB': 15, 'AC': 15  # Education levels
-    }
-    
-    for col, width in column_widths.items():
-        ws.column_dimensions[col].width = width
+    for col in range(1, 30):
+        ws.column_dimensions[get_column_letter(col)].width = 20
 
     # Instructions
     instruction_row = row + 2
-    ws.cell(row=instruction_row, column=1, value="INSTRUCTIONS:")
-    ws.cell(row=instruction_row + 1, column=1, value="1. Les colonnes A-H sont pré-remplies avec les codes administratifs (ne pas modifier)")
-    ws.cell(row=instruction_row + 2, column=1, value="2. Remplir les colonnes I à AC avec les données démographiques et d'éducation")
-    ws.cell(row=instruction_row + 3, column=1, value="3. Les pourcentages doivent être entre 0 et 100")
-    ws.cell(row=instruction_row + 4, column=1, value="4. Les populations doivent être des nombres entiers positifs")
-    ws.cell(row=instruction_row + 5, column=1, value="5. Ne pas laisser de cellules vides pour les colonnes obligatoires (Country Code, Region Code)")
+    ws.cell(row=instruction_row, column=1, value="INSTRUCTIONS :")
+    ws.cell(row=instruction_row + 1, column=1, value="- Remplir les colonnes de données pour chaque ligne selon le niveau indiqué dans 'niveau_donnee'.")
+    ws.cell(row=instruction_row + 2, column=1, value="- Ne pas modifier les colonnes administratives ni 'niveau_donnee'.")
+    ws.cell(row=instruction_row + 3, column=1, value="- Vous pouvez ajouter d'autres lignes si besoin, mais respectez les valeurs possibles pour 'niveau_donnee' : region, departement, commune.")
 
-    # Style pour les instructions
     instruction_font = Font(bold=True, color="000000")
-    for r in range(instruction_row, instruction_row + 6):
+    for r in range(instruction_row, instruction_row + 4):
         cell = ws.cell(row=r, column=1)
         cell.font = instruction_font
 
-    # Créer la réponse HTTP
     response = HttpResponse(
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
-    response['Content-Disposition'] = 'attachment; filename=template_import_donnees.xlsx'
-    
-    # Sauvegarder le fichier
+    response['Content-Disposition'] = 'attachment; filename=template_import_donnees_niveaux.xlsx'
     wb.save(response)
     return response
 
 def export_all_data(request):
-    # Créer un nouveau fichier Excel
+    year = request.GET.get('year')
+    if year:
+        try:
+            census = Census.objects.get(year=year)
+        except Census.DoesNotExist:
+            census = None
+    else:
+        census = Census.objects.order_by('-year').first()
+        year = census.year if census else ''
+
     wb = openpyxl.Workbook()
 
     # Feuille pour les régions
@@ -414,33 +419,36 @@ def export_all_data(request):
         'Population 10+', 'Taux Célibataire', 'Taux Marié',
         'Taux Divorcé', 'Taux Veuf', "Taux Scolarisation",
         "Taux d'Analphabétisme (10+)", "Population 15+",
-        "Taux d'Analphabétisme (15+)"
+        "Taux d'Analphabétisme (15+)",
+        'Aucun niveau', 'Préscolaire', 'Primaire', 'Collège', 'Lycée', 'Université'
     ])
     
-    # Appliquer des styles pour les en-têtes
     for cell in ws_region[1]:
         cell.font = Font(bold=True, size=12)
         cell.alignment = Alignment(horizontal='center', vertical='center')
 
-    # Récupérer et ajouter les données des régions
     regions = Region.objects.all()
     for region in regions:
-        demo_data = DemographicData.objects.filter(region=region).first()
+        demo_data = DemographicData.objects.filter(region=region, census=census).first() if census else None
         if demo_data:
+            education = getattr(demo_data, 'educationlevel', None)
             ws_region.append([
                 region.adm1_en, region.adm1_pcode,
                 demo_data.total_population, demo_data.male_percentage, demo_data.female_percentage,
                 demo_data.population_10_plus, demo_data.single_rate, demo_data.married_rate,
                 demo_data.divorced_rate, demo_data.widowed_rate, demo_data.school_enrollment_rate,
                 demo_data.illiteracy_rate_10_plus, demo_data.population_15_plus,
-                demo_data.illiteracy_rate_15_plus
+                demo_data.illiteracy_rate_15_plus,
+                education.no_education if education else None,
+                education.preschool if education else None,
+                education.primary if education else None,
+                education.middle_school if education else None,
+                education.high_school if education else None,
+                education.university if education else None,
             ])
-    
-    # Ajuster la largeur des colonnes
     for col in ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N']:
         ws_region.column_dimensions[col].width = 20
 
-    # Feuille pour les départements
     ws_department = wb.create_sheet(title="Départements")
     ws_department.append([
         'Région', 'Nom Département', 'Code Département',
@@ -448,33 +456,34 @@ def export_all_data(request):
         'Population 10+', 'Taux Célibataire', 'Taux Marié',
         'Taux Divorcé', 'Taux Veuf', "Taux Scolarisation",
         "Taux d'Analphabétisme (10+)", "Population 15+",
-        "Taux d'Analphabétisme (15+)"
+        "Taux d'Analphabétisme (15+)",
+        'Aucun niveau', 'Préscolaire', 'Primaire', 'Collège', 'Lycée', 'Université'
     ])
-    
-    # Appliquer des styles pour les en-têtes
     for cell in ws_department[1]:
         cell.font = Font(bold=True, size=12)
         cell.alignment = Alignment(horizontal='center', vertical='center')
-
-    # Récupérer et ajouter les données des départements
     departments = Department.objects.all()
     for department in departments:
-        demo_data = DemographicData.objects.filter(department=department).first()
+        demo_data = DemographicData.objects.filter(department=department, census=census).first() if census else None
         if demo_data:
+            education = getattr(demo_data, 'educationlevel', None)
             ws_department.append([
                 department.region.adm1_en, department.adm2_en, department.adm2_pcode,
                 demo_data.total_population, demo_data.male_percentage, demo_data.female_percentage,
                 demo_data.population_10_plus, demo_data.single_rate, demo_data.married_rate,
                 demo_data.divorced_rate, demo_data.widowed_rate, demo_data.school_enrollment_rate,
                 demo_data.illiteracy_rate_10_plus, demo_data.population_15_plus,
-                demo_data.illiteracy_rate_15_plus
+                demo_data.illiteracy_rate_15_plus,
+                education.no_education if education else None,
+                education.preschool if education else None,
+                education.primary if education else None,
+                education.middle_school if education else None,
+                education.high_school if education else None,
+                education.university if education else None,
             ])
-    
-    # Ajuster la largeur des colonnes
     for col in ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N']:
         ws_department.column_dimensions[col].width = 20
 
-    # Feuille pour les communes
     ws_commune = wb.create_sheet(title="Communes")
     ws_commune.append([
         'Département', 'Nom Commune', 'Code Commune',
@@ -482,44 +491,53 @@ def export_all_data(request):
         'Population 10+', 'Taux Célibataire', 'Taux Marié',
         'Taux Divorcé', 'Taux Veuf', "Taux Scolarisation",
         "Taux d'Analphabétisme (10+)", "Population 15+",
-        "Taux d'Analphabétisme (15+)"
+        "Taux d'Analphabétisme (15+)",
+        'Aucun niveau', 'Préscolaire', 'Primaire', 'Collège', 'Lycée', 'Université'
     ])
-    
-    # Appliquer des styles pour les en-têtes
     for cell in ws_commune[1]:
         cell.font = Font(bold=True, size=12)
         cell.alignment = Alignment(horizontal='center', vertical='center')
-
-    # Récupérer et ajouter les données des communes
     communes = Commune.objects.all()
     for commune in communes:
-        demo_data = DemographicData.objects.filter(commune=commune).first()
+        demo_data = DemographicData.objects.filter(commune=commune, census=census).first() if census else None
         if demo_data:
+            education = getattr(demo_data, 'educationlevel', None)
             ws_commune.append([
                 commune.department.adm2_en, commune.adm3_en, commune.adm3_pcode,
                 demo_data.total_population, demo_data.male_percentage, demo_data.female_percentage,
                 demo_data.population_10_plus, demo_data.single_rate, demo_data.married_rate,
                 demo_data.divorced_rate, demo_data.widowed_rate, demo_data.school_enrollment_rate,
                 demo_data.illiteracy_rate_10_plus, demo_data.population_15_plus,
-                demo_data.illiteracy_rate_15_plus
+                demo_data.illiteracy_rate_15_plus,
+                education.no_education if education else None,
+                education.preschool if education else None,
+                education.primary if education else None,
+                education.middle_school if education else None,
+                education.high_school if education else None,
+                education.university if education else None,
             ])
-    
-    # Ajuster la largeur des colonnes
     for col in ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N']:
         ws_commune.column_dimensions[col].width = 20
 
-    # Créer une réponse HTTP avec le fichier Excel
     response = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-    response['Content-Disposition'] = 'attachment; filename="donnees_mauritanie.xlsx"'
+    response['Content-Disposition'] = f'attachment; filename="donnees_mauritanie_{year}.xlsx"'
     wb.save(response)
     return response
 
 def export_zone_data(request, zone_id, zone_type):
-    # Créer un nouveau fichier Excel
+    year = request.GET.get('year')
+    if year:
+        try:
+            census = Census.objects.get(year=year)
+        except Census.DoesNotExist:
+            census = None
+    else:
+        census = Census.objects.order_by('-year').first()
+        year = census.year if census else ''
+
     wb = Workbook()
     ws = wb.active
     
-    # Définir les en-têtes
     headers = [
         'Zone',
         'Type',
@@ -537,7 +555,6 @@ def export_zone_data(request, zone_id, zone_type):
         "Taux d'Analphabétisme (15+)"
     ]
     
-    # Récupérer la zone et ses données
     zone = None
     zone_name = ""
     data = None
@@ -545,28 +562,26 @@ def export_zone_data(request, zone_id, zone_type):
     if zone_type == 'region':
         zone = Region.objects.get(id=zone_id)
         zone_name = zone.adm1_en
-        data = DemographicData.objects.filter(region=zone).first()
+        data = DemographicData.objects.filter(region=zone, census=census).first() if census else None
         ws.title = f"Région {zone_name}"
         
     elif zone_type == 'department':
         zone = Department.objects.get(id=zone_id)
         zone_name = zone.adm2_en
-        data = DemographicData.objects.filter(department=zone).first()
+        data = DemographicData.objects.filter(department=zone, census=census).first() if census else None
         ws.title = f"Département {zone_name}"
         
     elif zone_type == 'commune':
         zone = Commune.objects.get(id=zone_id)
         zone_name = zone.adm3_en
-        data = DemographicData.objects.filter(commune=zone).first()
+        data = DemographicData.objects.filter(commune=zone, census=census).first() if census else None
         ws.title = f"Commune {zone_name}"
         
     else:
         return HttpResponse("Type de zone non valide.", status=400)
 
-    # Ajouter les en-têtes
     ws.append(headers)
     
-    # Ajouter les données si elles existent
     if data:
         ws.append([
             zone_name,
@@ -587,16 +602,14 @@ def export_zone_data(request, zone_id, zone_type):
     else:
         ws.append([zone_name, zone_type.capitalize()] + ['N/A'] * (len(headers) - 2))
 
-    # Appliquer des styles
-    for cell in ws[1]:  # En-têtes
+    for cell in ws[1]:
         cell.font = Font(bold=True, size=12)
         cell.alignment = Alignment(horizontal='center', vertical='center')
     
-    if ws.max_row > 1:  # Données si elles existent
+    if ws.max_row > 1:
         for cell in ws[2]:
             cell.alignment = Alignment(horizontal='center', vertical='center')
 
-    # Ajuster la largeur des colonnes
     column_widths = {
         'A': 25,  # Nom de la zone
         'B': 15,  # Type
@@ -608,9 +621,15 @@ def export_zone_data(request, zone_id, zone_type):
     for col, width in column_widths.items():
         ws.column_dimensions[col].width = width
 
-    # Réponse HTTP
-    filename = f"donnees_{zone_type}_{zone_name.replace(' ', '_')}.xlsx"
+    filename = f"donnees_{zone_type}_{zone_name.replace(' ', '_')}_{year}.xlsx"
     response = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     response['Content-Disposition'] = f'attachment; filename="{filename}"'
     wb.save(response)
     return response
+
+class CensusYearsView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        available_years = list(Census.objects.values_list('year', flat=True))
+        return Response(available_years)

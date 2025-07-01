@@ -17,7 +17,8 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     CountryViewSet, RegionViewSet, DepartmentViewSet, CommuneViewSet,
     DemographicDataListCreateView, DemographicDataDetailView,
-    export_all_data, export_zone_data, CentralizedImportView, download_template
+    export_all_data, export_zone_data, CentralizedImportView, download_template,
+    CensusYearsView
 )
 
 router = DefaultRouter()
@@ -31,6 +32,7 @@ urlpatterns = [
     path('api/', include(router.urls)),
     path('api/demographics/', DemographicDataListCreateView.as_view(), name='demographics-list-create'),
     path('api/demographics/<int:pk>/', DemographicDataDetailView.as_view(), name='demographics-detail'),
+    path('api/census-years/', CensusYearsView.as_view(), name='census-years'),
     
     # URLs pour l'export
     path('export-all-data/', export_all_data, name='export_all_data'),

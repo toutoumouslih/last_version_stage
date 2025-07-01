@@ -134,6 +134,60 @@ export const FILTER_CATEGORIES: FilterCategory[] = [
         ranges: [10, 20, 30, 40, 50, 60]
       }
     ]
+  },
+  {
+    id: 'education-level',
+    title: 'Niveaux d\'éducation',
+    options: [
+      {
+        id: 'no-education',
+        label: 'Aucun niveau',
+        field: 'education_level.no_education',
+        type: 'percentage',
+        colorScale: ['#F7FCF5', '#BAE4B3', '#74C476', '#31A354', '#006D2C', '#00441B'],
+        ranges: [0, 5, 10, 20, 30, 50]
+      },
+      {
+        id: 'preschool',
+        label: 'Préscolaire',
+        field: 'education_level.preschool',
+        type: 'percentage',
+        colorScale: ['#F0F9E8', '#BAE4BC', '#7BCCC4', '#43A2CA', '#0868AC', '#084081'],
+        ranges: [0, 2, 5, 10, 15, 20]
+      },
+      {
+        id: 'primary',
+        label: 'Primaire',
+        field: 'education_level.primary',
+        type: 'percentage',
+        colorScale: ['#FFF5F0', '#FCAE91', '#FB6A4A', '#DE2D26', '#A50F15', '#67000D'],
+        ranges: [0, 10, 20, 30, 40, 50]
+      },
+      {
+        id: 'middle-school',
+        label: 'Collège',
+        field: 'education_level.middle_school',
+        type: 'percentage',
+        colorScale: ['#F7FBFF', '#C6DBEF', '#6BAED6', '#3182BD', '#08519C', '#08306B'],
+        ranges: [0, 5, 10, 15, 20, 30]
+      },
+      {
+        id: 'high-school',
+        label: 'Lycée',
+        field: 'education_level.high_school',
+        type: 'percentage',
+        colorScale: ['#F7F4F9', '#D4B9DA', '#998EC3', '#8073AC', '#6A51A3', '#4A1486'],
+        ranges: [0, 2, 5, 10, 15, 20]
+      },
+      {
+        id: 'university',
+        label: 'Université',
+        field: 'education_level.university',
+        type: 'percentage',
+        colorScale: ['#FEEBE2', '#FBB4B9', '#F768A1', '#C51B8A', '#7A0177', '#49006A'],
+        ranges: [0, 2, 5, 10, 15, 20]
+      }
+    ]
   }
 ];
 

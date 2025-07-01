@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { MapContainer, TileLayer, GeoJSON, Marker, useMap } from 'react-leaflet';
-import { FaEye, FaEyeSlash, FaDownload } from 'react-icons/fa';
+import { FaEye, FaEyeSlash, FaDownload, FaSearch } from 'react-icons/fa';
 import { Modal, Button, Alert } from 'react-bootstrap';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import 'leaflet/dist/leaflet.css';
@@ -8,6 +8,8 @@ import L from 'leaflet';
 import { FILTER_CATEGORIES } from './filtersConfig';
 import { FilterPanel } from './FilterPanel';
 import { Region, Departement, Commune, Demographic, FilterOption } from '../types/types';
+import debounce from 'lodash.debounce';
+console.log('MapComponent loaded');
 
 const MAURITANIA_BOUNDS = L.latLngBounds(
   L.latLng(14.5, -17.5),
@@ -118,7 +120,18 @@ const ZoneLabels: React.FC<ZoneLabelsProps> = ({
 
   const getDisplayValue = (data: Demographic | undefined) => {
     if (!data || !activeFilter) return '';
-    const rawValue = data[activeFilter.field];
+    // Supporte les champs imbriqués comme 'education_level.no_education'
+    // @ts-ignore: field peut être string
+    const fieldPath = String(activeFilter.field).split('.');
+    let rawValue: any = data;
+    for (const part of fieldPath) {
+      if (rawValue && part in rawValue) {
+        rawValue = rawValue[part];
+      } else {
+        rawValue = undefined;
+        break;
+      }
+    }
     if (rawValue === null || rawValue === undefined || rawValue === '') return '';
     const numericValue = typeof rawValue === 'string' ? parseFloat(rawValue) : rawValue;
     return activeFilter.type === 'percentage'
@@ -251,6 +264,8 @@ const ZoneLabels: React.FC<ZoneLabelsProps> = ({
   );
 };
 
+const normalize = (str: string) => str.normalize('NFD').replace(/[ -]/g, '').toLowerCase();
+
 const MapComponent: React.FC = () => {
   const [activeGeoLevel, setActiveGeoLevel] = useState<'region' | 'department' | 'commune'>('region');
   const [showDownloadSuccess, setShowDownloadSuccess] = useState(false);
@@ -265,6 +280,11 @@ const MapComponent: React.FC = () => {
   const [showFilters, setShowFilters] = useState(true);
   const [showNames, setShowNames] = useState(true);
   const [zoomLevel, setZoomLevel] = useState(6);
+  const [availableYears, setAvailableYears] = useState<number[]>([]);
+  const [selectedYear, setSelectedYear] = useState<number | null>(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [highlightedZone, setHighlightedZone] = useState<{id: number, level: 'region'|'department'|'commune'}|null>(null);
   const mapRef = useRef<L.Map | null>(null);
 
   const handleGeoLevelSelect = (level: 'region' | 'department' | 'commune') => {
@@ -278,13 +298,18 @@ const MapComponent: React.FC = () => {
 
   const handleExportClick = async () => {
     try {
-      const response = await fetch('http://127.0.0.1:8000/api/export-all-data/');
+      const response = await fetch(`http://127.0.0.1:8000/api/export-all-data/?year=${selectedYear}`);
       if (response.ok) {
         const blob = await response.blob();
+        // Forcer le nom du fichier côté frontend
+        const filename = `donnees_mauritanie_${selectedYear}.xlsx`;
+        const file = new File([blob], filename, { type: blob.type });
         const link = document.createElement('a');
-        link.href = URL.createObjectURL(blob);
-        link.download = 'all_data_export.xlsx';
+        link.href = URL.createObjectURL(file);
+        link.download = filename;
+        document.body.appendChild(link);
         link.click();
+        document.body.removeChild(link);
         setShowDownloadSuccess(true);
         setTimeout(() => setShowDownloadSuccess(false), 3000);
       } else {
@@ -297,13 +322,18 @@ const MapComponent: React.FC = () => {
 
   const handleExportZoneData = async (zoneId: number, zoneType: 'region' | 'department' | 'commune') => {
     try {
-      const response = await fetch(`http://127.0.0.1:8000/api/export-zone-data/${zoneId}/${zoneType}/`);
+      const response = await fetch(`http://127.0.0.1:8000/api/export-zone-data/${zoneId}/${zoneType}/?year=${selectedYear}`);
       if (response.ok) {
         const blob = await response.blob();
+        // Forcer le nom du fichier côté frontend
+        const filename = `donnees_${zoneType}_${zoneId}_${selectedYear}.xlsx`;
+        const file = new File([blob], filename, { type: blob.type });
         const link = document.createElement('a');
-        link.href = URL.createObjectURL(blob);
-        link.download = `${zoneType}_data_${zoneId}.xlsx`;
+        link.href = URL.createObjectURL(file);
+        link.download = filename;
+        document.body.appendChild(link);
         link.click();
+        document.body.removeChild(link);
         setShowDownloadSuccess(true);
         setTimeout(() => setShowDownloadSuccess(false), 3000);
       } else {
@@ -317,22 +347,47 @@ const MapComponent: React.FC = () => {
   useEffect(() => {
     const loadData = async () => {
       try {
-        const [regionsData, depsData, communesData, demoData] = await Promise.all([
+        // Charger les années disponibles
+        const yearsResponse = await fetch('http://127.0.0.1:8000/api/api/census-years/');
+        const yearsData = await yearsResponse.json();
+        setAvailableYears(yearsData);
+        
+        // Définir l'année par défaut (la plus récente)
+        if (yearsData.length > 0) {
+          const defaultYear = Math.max(...yearsData);
+          setSelectedYear(defaultYear);
+        }
+
+        const [regionsData, depsData, communesData] = await Promise.all([
           fetch('http://127.0.0.1:8000/api/api/regions/').then(res => res.json()),
           fetch('http://127.0.0.1:8000/api/api/departments/').then(res => res.json()),
           fetch('http://127.0.0.1:8000/api/api/communes/').then(res => res.json()),
-          fetch('http://127.0.0.1:8000/api/api/demographics/').then(res => res.json())
         ]);
         setRegions(regionsData);
         setDepartements(depsData);
         setCommunes(communesData);
-        setDemographics(demoData);
       } catch (error) {
         console.error("Error loading data:", error);
       }
     };
     loadData();
   }, []);
+
+  // Charger les données démographiques quand l'année change
+  useEffect(() => {
+    const loadDemographicData = async () => {
+      if (selectedYear) {
+        try {
+          const response = await fetch(`http://127.0.0.1:8000/api/api/demographics/?year=${selectedYear}`);
+          const demoData = await response.json();
+          setDemographics(demoData);
+        } catch (error) {
+          console.error("Error loading demographic data:", error);
+        }
+      }
+    };
+    loadDemographicData();
+  }, [selectedYear]);
 
   const handleFeatureClick = (featureId: number, level: 'region' | 'department' | 'commune') => {
     const field = level === 'region' ? 'region' : level === 'department' ? 'department' : 'commune';
@@ -381,6 +436,71 @@ const MapComponent: React.FC = () => {
     };
   };
 
+  const demographicLabels: Record<string, string> = {
+    total_population: 'Population totale',
+    male_percentage: '% Hommes',
+    female_percentage: '% Femmes',
+    urban_percentage: '% Urbain',
+    rural_percentage: '% Rural',
+    population_10_plus: 'Population 10 ans et +',
+    single_rate: '% Célibataires',
+    married_rate: '% Mariés',
+    divorced_rate: '% Divorcés',
+    widowed_rate: '% Veufs/veuves',
+    school_enrollment_rate: 'Taux de scolarisation',
+    illiteracy_rate_10_plus: "Taux d'analphabétisme (10+)",
+    population_15_plus: 'Population 15 ans et +',
+    illiteracy_rate_15_plus: "Taux d'analphabétisme (15+)",
+  };
+
+  // Recherche avancée (auto-complétion, insensible à la casse/accents)
+  const allZones = [
+    ...regions.map(r => ({ id: r.id, name: r.adm1_en, level: 'region', geo_json: r.geo_json })),
+    ...departements.map(d => ({ id: d.id, name: d.adm2_en, level: 'department', geo_json: d.geo_json })),
+    ...communes.map(c => ({ id: c.id, name: c.adm3_en, level: 'commune', geo_json: c.geo_json })),
+  ];
+  const handleSearch = debounce((value: string) => {
+    const term = normalize(value);
+    if (!term) { setSearchResults([]); return; }
+    setSearchResults(
+      allZones.filter(z => normalize(z.name).includes(term)).slice(0, 7)
+    );
+  }, 200);
+  useEffect(() => { handleSearch(searchTerm); }, [searchTerm, regions, departements, communes]);
+  const handleSelectZone = (zone: any) => {
+    setHighlightedZone({ id: zone.id, level: zone.level });
+    setSearchTerm(zone.name);
+    setSearchResults([]);
+    setActiveGeoLevel(zone.level);
+    setSelectedZoneId(zone.id);
+    if (mapRef.current) {
+      const bounds = L.geoJSON(zone.geo_json).getBounds();
+      mapRef.current.fitBounds(bounds, { maxZoom: 10 });
+    }
+  };
+
+  // Ajoute la fonction de sélection de zone depuis la recherche
+  const handleZoneSearchSelect = (zoneId: number, level: 'region' | 'department' | 'commune') => {
+    setActiveGeoLevel(level);
+    setSelectedZoneId(zoneId);
+    // Centre la carte sur la zone
+    let zone = null;
+    if (level === 'region') zone = regions.find(r => r.id === zoneId);
+    if (level === 'department') zone = departements.find(d => d.id === zoneId);
+    if (level === 'commune') zone = communes.find(c => c.id === zoneId);
+    if (zone && mapRef.current) {
+      const bounds = L.geoJSON(zone.geo_json).getBounds();
+      mapRef.current.fitBounds(bounds, { maxZoom: 10 });
+    }
+    // Ouvre la modale si les données existent
+    const field = level === 'region' ? 'region' : level === 'department' ? 'department' : 'commune';
+    const data = demographics.find(d => d[field] === zoneId);
+    if (data) {
+      setSelectedData({ ...data, zoneType: level, zoneId });
+      setShowModal(true);
+    }
+  };
+
   return (
     <div style={{ display: 'flex', height: '100vh', flexDirection: 'column' }}>
       {showDownloadSuccess && (
@@ -392,6 +512,30 @@ const MapComponent: React.FC = () => {
 
       <div style={{ padding: '10px', backgroundColor: '#f8f9fa', borderBottom: '1px solid #dee2e6', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <h4 style={{ margin: 0 }}>Carte de la Mauritanie</h4>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <label htmlFor="year-select" style={{ fontWeight: 'bold', marginRight: '5px' }}>
+            Année de recensement:
+          </label>
+          <select
+            id="year-select"
+            value={selectedYear || ''}
+            onChange={(e) => setSelectedYear(Number(e.target.value))}
+            style={{
+              padding: '5px 10px',
+              borderRadius: '4px',
+              border: '1px solid #ccc',
+              backgroundColor: 'white',
+              fontSize: '14px',
+              cursor: 'pointer'
+            }}
+          >
+            {availableYears.map(year => (
+              <option key={year} value={year}>
+                {year}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
@@ -404,6 +548,10 @@ const MapComponent: React.FC = () => {
           showFilters={showFilters} 
           activeGeoLevel={activeGeoLevel}
           onGeoLevelSelect={handleGeoLevelSelect}
+          regions={regions}
+          departements={departements}
+          communes={communes}
+          onZoneSearchSelect={handleZoneSearchSelect}
         /> 
         <div style={{ flex: 1, position: 'relative', height: '100%', display: 'flex', flexDirection: 'column' }}>
           <div style={{ height: '70%', width: '100%', position: 'relative' }}>
@@ -413,10 +561,12 @@ const MapComponent: React.FC = () => {
               style={{ height: '100%', width: '100%' }} 
               minZoom={5} 
               maxBounds={MAURITANIA_BOUNDS}
-              whenCreated={(map) => {
-                mapRef.current = map;
-                setZoomLevel(map.getZoom());
-                map.on('zoomend', () => setZoomLevel(map.getZoom()));
+              ref={(map) => {
+                if (map) {
+                  mapRef.current = map;
+                  setZoomLevel(map.getZoom());
+                  map.on('zoomend', () => setZoomLevel(map.getZoom()));
+                }
               }}
             >
               <TileLayer url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}" attribution='&copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community' />
@@ -494,21 +644,105 @@ const MapComponent: React.FC = () => {
             <Modal.Title>
               Détails de la {selectedData.zoneType === 'commune' ? 'Commune' : 
                             selectedData.zoneType === 'department' ? 'Moughataa' : 'Région'}
+              {selectedYear && ` - Recensement ${selectedYear}`}
             </Modal.Title>
           </Modal.Header>
           <Modal.Body style={{ maxHeight: '70vh', overflowY: 'auto' }}>
-            <table className="table table-sm table-striped">
+            <h5 style={{ marginTop: 0, marginBottom: '1rem', color: '#366092', fontWeight: 600 }}>Informations démographiques</h5>
+            <table className="table table-bordered" style={{ background: '#f9f9f9', borderRadius: 8 }}>
               <tbody>
-                {Object.entries(selectedData).filter(([key]) => 
-                  !["commune", "region", "department", "country", "id", "census", "zoneType", "zoneId"].includes(key)
-                ).map(([key, value]) => (
-                  <tr key={key}>
-                    <td><strong>{key}</strong></td>
-                    <td>{String(value)}</td>
-                  </tr>
-                ))}
+                {(() => {
+                  const maritalFields = [
+                    'single_rate', 'married_rate', 'divorced_rate', 'widowed_rate'
+                  ];
+                  const educationIndicators = [
+                    'school_enrollment_rate',
+                    'illiteracy_rate_10_plus',
+                    'illiteracy_rate_15_plus'
+                  ];
+                  let hasMaritalSubtitle = false;
+                  let hasEducationSubtitle = false;
+                  let rows: React.ReactNode[] = [];
+                  let buffer: React.ReactNode[] = [];
+                  Object.entries(selectedData)
+                    .filter(([key]) =>
+                      !["commune", "region", "department", "country", "id", "census", "zoneType", "zoneId", "education_level"].includes(key)
+                    )
+                    .forEach(([key, value], idx, arr) => {
+                      const isPercent = [
+                        'percentage', 'rate', 'taux', 'pourcentage', 'illiteracy', 'school_enrollment'
+                      ].some(substr => key.toLowerCase().includes(substr));
+                      const label = demographicLabels[key] || key;
+                      let displayValue = String(value);
+                      if (isPercent && value !== null && value !== undefined && value !== '') {
+                        displayValue = value + ' %';
+                      }
+                      // Bloc État matrimonial
+                      if (!hasMaritalSubtitle && maritalFields.includes(key)) {
+                        hasMaritalSubtitle = true;
+                        if (buffer.length > 0) rows = rows.concat(buffer), buffer = [];
+                        rows.push(
+                          <tr key="subtitle-marital-block">
+                            <td colSpan={2} style={{ padding: 0, border: 'none' }}>
+                              <h5 style={{ margin: '18px 0 8px 0', color: '#366092', fontWeight: 600 }}>État matrimonial</h5>
+                            </td>
+                          </tr>
+                        );
+                      }
+                      // Bloc Indicateurs d'éducation
+                      if (!hasEducationSubtitle && educationIndicators.includes(key)) {
+                        hasEducationSubtitle = true;
+                        if (buffer.length > 0) rows = rows.concat(buffer), buffer = [];
+                        rows.push(
+                          <tr key="subtitle-education-block">
+                            <td colSpan={2} style={{ padding: 0, border: 'none' }}>
+                              <h5 style={{ margin: '18px 0 8px 0', color: '#366092', fontWeight: 600 }}>Indicateurs d'éducation</h5>
+                            </td>
+                          </tr>
+                        );
+                      }
+                      buffer.push(
+                        <tr key={key} style={{ verticalAlign: 'middle' }}>
+                          <td style={{ fontWeight: 600, color: '#366092', width: '60%', padding: '8px 12px' }}>{label}</td>
+                          <td style={{ textAlign: 'right', width: '40%', padding: '8px 12px', fontSize: '1rem' }}>{displayValue}</td>
+                        </tr>
+                      );
+                    });
+                  if (buffer.length > 0) rows = rows.concat(buffer);
+                  return rows;
+                })()}
               </tbody>
             </table>
+            {/* Titre Niveaux d'éducation toujours visible */}
+            <h5 style={{ marginTop: '2rem', marginBottom: '1rem', color: '#366092', fontWeight: 600 }}>Niveaux d'éducation</h5>
+            {selectedData.education_level ? (
+              <table className="table table-bordered" style={{ background: '#f9f9f9', borderRadius: 8 }}>
+                <tbody>
+                  {Object.entries(selectedData.education_level).map(([key, value]) => {
+                    const labels: Record<string, string> = {
+                      no_education: 'Aucun niveau',
+                      preschool: 'Préscolaire',
+                      primary: 'Primaire',
+                      middle_school: 'Collège',
+                      high_school: 'Lycée',
+                      university: 'Université'
+                    };
+                    // Tous les niveaux d'éducation sont des pourcentages
+                    let displayValue = value !== null && value !== undefined && value !== '' ? value + ' %' : '';
+                    return (
+                      <tr key={key} style={{ verticalAlign: 'middle' }}>
+                        <td style={{ fontWeight: 600, color: '#366092', width: '60%', padding: '8px 12px' }}>{labels[key] || key}</td>
+                        <td style={{ textAlign: 'right', width: '40%', padding: '8px 12px', fontSize: '1rem' }}>{displayValue}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            ) : (
+              <div style={{ color: '#888', fontStyle: 'italic', marginBottom: '1rem' }}>
+                Pas de données de niveaux d'éducation disponibles.
+              </div>
+            )}
           </Modal.Body>
           <Modal.Footer>
             <Button 
@@ -530,6 +764,33 @@ const MapComponent: React.FC = () => {
           </Modal.Footer>
         </Modal>
       )}
+
+      {/* Barre de recherche avancée flottante */}
+      {/* <div style={{ position: 'absolute', top: 16, left: 70, zIndex: 10, width: 1 }}>
+        <div style={{ display: 'flex', alignItems: 'center', background: '#fff', borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.10)', padding: '4px 12px', gap: 8 }}>
+          <FaSearch color="#366092" />
+          <input
+            type="text"
+            placeholder="Rechercher une zone..."
+            value={searchTerm}
+            onChange={e => setSearchTerm(e.target.value)}
+            style={{ border: 'none', outline: 'none', fontSize: 15, flex: 1, background: 'transparent', color: '#222', padding: '6px 0' }}
+          />
+        </div>
+        {searchResults.length > 0 && (
+          <div style={{ background: '#fff', borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.15)', marginTop: 2, maxHeight: 220, overflowY: 'auto', position: 'absolute', width: '100%' }}>
+            {searchResults.map(zone => (
+              <div
+                key={zone.level + '-' + zone.id}
+                onClick={() => handleSelectZone(zone)}
+                style={{ padding: '10px 14px', cursor: 'pointer', color: '#366092', fontWeight: 500, borderBottom: '1px solid #f0f0f0', background: highlightedZone && highlightedZone.id === zone.id && highlightedZone.level === zone.level ? '#eaf1fa' : 'transparent' }}
+              >
+                {zone.name} <span style={{ fontSize: 12, color: '#888', fontWeight: 400 }}>({zone.level === 'region' ? 'Région' : zone.level === 'department' ? 'Moughataa' : 'Commune'})</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div> */}
     </div>
   );
 };
